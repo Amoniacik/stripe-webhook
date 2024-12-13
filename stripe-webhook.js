@@ -1,52 +1,51 @@
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
-const crypto = require('crypto');
-const { PDFDocument } = require('pdf-lib');  // Používame knižnicu na generovanie PDF
+const stripe = require('stripe')('YOUR_SECRET_KEY'); // Nahradiť tvojím Stripe Secret Key
+const nodemailer = require('nodemailer'); // Na odosielanie e-mailov
 
 export default async function handler(req, res) {
   if (req.method === 'POST') {
     const sig = req.headers['stripe-signature'];
-    const event = req.body;
+    const webhookSecret = 'YOUR_WEBHOOK_SECRET'; // Nahradiť tvojím Webhook Secret
+
+    let event;
 
     try {
-      const endpointSecret = process.env.STRIPE_ENDPOINT_SECRET;
-
-      // Verifikácia webhooku
-      stripe.webhooks.constructEvent(event, sig, endpointSecret);
-
-      // Spracovanie udalosti 'payment_intent.succeeded'
-      if (event.type === 'payment_intent.succeeded') {
-        const paymentIntent = event.data.object;
-        
-        // Generovanie PDF
-        const doc = await PDFDocument.create();
-        const page = doc.addPage([600, 400]);
-        const { width, height } = page.getSize();
-        const font = await doc.embedFont(PDFDocument.Font.Helvetica);
-        const text = `Invoice for Payment ID: ${paymentIntent.id}\nAmount: ${(paymentIntent.amount_received / 100).toFixed(2)} ${paymentIntent.currency.toUpperCase()}`;
-
-        page.drawText(text, {
-          x: 50,
-          y: height - 100,
-          size: 12,
-          font,
-        });
-
-        const pdfBytes = await doc.save();
-
-        // Uloženie PDF na server alebo odoslanie cez email (prípadne ukladanie do cloud storage)
-        const fs = require('fs');
-        fs.writeFileSync(`/tmp/invoice_${paymentIntent.id}.pdf`, pdfBytes);
-
-        res.status(200).send('Webhook processed and PDF generated.');
-      } else {
-        res.status(400).send(`Unhandled event type: ${event.type}`);
-      }
+      event = stripe.webhooks.constructEvent(req.body, sig, webhookSecret);
     } catch (err) {
-      console.log('Error handling webhook:', err);
-      res.status(500).send('Webhook Error');
+      console.log('Webhook error: ', err.message);
+      return res.status(400).send(`Webhook error: ${err.message}`);
+    }
+
+    // Ak platba bola úspešná, odošleme e-mail
+    if (event.type === 'payment_intent.succeeded') {
+      const paymentIntent = event.data.object;
+
+      // Definovanie e-mailu
+      const transporter = nodemailer.createTransport({
+        service: 'gmail',
+        auth: {
+          user: 'your-email@gmail.com',
+          pass: 'your-email-password', // Používaj environment variables pre lepšiu bezpečnosť
+        },
+      });
+
+      const mailOptions = {
+        from: 'info@tvojadomena.sk',
+        to: paymentIntent.receipt_email,
+        subject: 'Hello World',
+        text: 'Hello World',
+      };
+
+      try {
+        await transporter.sendMail(mailOptions);
+        res.status(200).send('E-mail bol odoslaný');
+      } catch (error) {
+        console.error('Chyba pri odosielaní e-mailu: ', error);
+        res.status(500).send('Chyba pri odosielaní e-mailu');
+      }
+    } else {
+      res.status(200).send('Udalosť nie je platba');
     }
   } else {
-    res.status(405).send('Method Not Allowed');
+    res.status(405).send('Metóda zakázaná');
   }
 }
-
